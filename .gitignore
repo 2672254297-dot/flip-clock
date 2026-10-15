@@ -1,0 +1,20 @@
+# ---- 运行时数据（每台机器各自生成，不入库）----
+app/.edge-profile/
+app/runtime.json
+app/overlay.pid
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ---- 自测运行时产物（截图由测试现场生成，不入库）----
+tests/selftest-*.png
+tests/selftest-idle.txt
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

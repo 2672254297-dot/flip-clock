@@ -1,0 +1,1365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flip Clock</title>
+<style>
+  :root {
+    /* 尺寸 */
+    --cw: clamp(72px, 10.5vw, 148px);       /* 卡片宽度 */
+    --ch: calc(var(--cw) * 1.42);           /* 卡片高度 */
+    --r: calc(var(--cw) * 0.12);            /* 圆角 */
+    --fs: calc(var(--ch) * 0.74);           /* 字号 */
+    --gap: clamp(10px, 1.5vw, 26px);        /* 间距 */
+    --dur: 280ms;                           /* 单程翻页时长 */
+
+    /* 主题（由 JS 设置，可持久化） */
+    --bg: #000000;                          /* 背景底色 */
+    --bg-img: none;                         /* 背景图片 */
+    --bg-mask: 0.3;                         /* 背景图片蒙版浓度 */
+    --card-top-1: #2b333e;
+    --card-top-2: #1f252d;
+    --card-bot-1: #1c222a;
+    --card-bot-2: #141920;
+    --colon-1: #262d36;
+    --colon-2: #1a1f26;
+    --seam: #0a0c0f;                        /* 中缝颜色 */
+    --digit: #ffffff;                       /* 数字颜色 */
+    --glow: rgba(255, 255, 255, 0.10);      /* 数字辉光 */
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; }
+
+  body {
+    background-color: var(--bg);
+    overflow: hidden;
+    font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------------- 舞台（整块淡入淡出） ---------------- */
+  .stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    transition: opacity .6s ease;
+  }
+
+  /* 屏保模式：默认隐藏，等宿主通知后再淡入 */
+  html.ov .stage { opacity: 0; }
+
+  /* 屏保窗口里默认藏起设置入口；按住 Alt（或面板已打开）时才可用 */
+  html.ov .gear,
+  html.ov .panel { display: none; }
+  html.ov.alt .gear,
+  html.ov body.panel-open .gear { display: flex; }
+  html.ov.alt .panel,
+  html.ov body.panel-open .panel { display: block; }
+  html.alt .gear { opacity: 1; transform: scale(1); }
+
+  /* 手动模式（宿主 --manual）：不用按 Alt，齿轮/提示条直接用 */
+  html.ov.manual .gear { display: flex; }
+  html.ov.manual .panel { display: block; }
+  html.ov.manual:not(.nocursor) .alt-hint { display: flex; }
+
+  /* 全局：全屏显示时隐藏鼠标箭头（动一下鼠标临时显示） */
+  html.nocursor,
+  html.nocursor * { cursor: none !important; }
+
+  /* ---------------- 背景图层 ---------------- */
+  .bg-photo {
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    background-image: var(--bg-img);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    pointer-events: none;
+  }
+  .bg-mask {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--bg);
+    opacity: var(--bg-mask);
+    pointer-events: none;
+  }
+
+  .clock {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--gap);
+  }
+
+  /* ---------------- 卡片 ---------------- */
+  .card {
+    position: relative;
+    width: var(--cw);
+    height: var(--ch);
+    perspective: 820px;
+    transform-style: preserve-3d;
+    color: var(--digit);
+    font-size: var(--fs);
+    font-weight: 200;
+    line-height: 1;
+  }
+
+  /* 卡片外发光 / 投影（不能加 filter，否则会压平 3D） */
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--r);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.03);
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  /* 上下静片与翻页片共用几何：均为卡片的一半，内部裁切整字 */
+  .half, .flap {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 50%;
+    overflow: hidden;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  .half span, .flap span {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: var(--ch);
+    line-height: var(--ch);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-weight: 200;
+    letter-spacing: 0.01em;
+    color: var(--digit);
+    text-shadow: 0 0 22px var(--glow);
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .half.top, .flap-top {
+    top: 0;
+    border-radius: var(--r) var(--r) 0 0;
+    background: linear-gradient(180deg, var(--card-top-1) 0%, var(--card-top-2) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  .half.bottom, .flap-bottom {
+    bottom: 0;
+    border-radius: 0 0 var(--r) var(--r);
+    background: linear-gradient(180deg, var(--card-bot-1) 0%, var(--card-bot-2) 100%);
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+  }
+
+  .half.top span,    .flap-top span    { top: 0; }
+  .half.bottom span, .flap-bottom span { top: calc(var(--ch) * -0.5); }
+
+  .half { z-index: 1; }
+
+  /* 贯穿左右的水平中缝 */
+  .seam {
+    position: absolute;
+    left: 0;
+    top: calc(50% - 0.5px);
+    width: 100%;
+    height: 1px;
+    background: var(--seam);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    z-index: 3;
+  }
+
+  /* ---------------- 翻页片 ---------------- */
+  .flap {
+    z-index: 4;
+    opacity: 0;
+  }
+
+  .flap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: #000000;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .flap-top    { transform-origin: 50% 100%; }
+  .flap-bottom { transform-origin: 50% 0%; transform: rotateX(90deg); }
+
+  .card.flipping .flap-top {
+    opacity: 1;
+    animation: flipTop var(--dur) cubic-bezier(0.42, 0, 0.90, 0.62) forwards;
+  }
+  .card.flipping .flap-top::after {
+    animation: shadeDown var(--dur) ease-in forwards;
+  }
+
+  .card.flipping .flap-bottom {
+    opacity: 1;
+    animation: flipBottom var(--dur) var(--dur) cubic-bezier(0.10, 0.38, 0.62, 1) forwards;
+  }
+  .card.flipping .flap-bottom::after {
+    animation: shadeUp var(--dur) var(--dur) ease-out forwards;
+  }
+
+  @keyframes flipTop    { from { transform: rotateX(0deg); }  to { transform: rotateX(-90deg); } }
+  @keyframes flipBottom { from { transform: rotateX(90deg); } to { transform: rotateX(0deg); } }
+  @keyframes shadeDown  { from { opacity: 0.10; } to { opacity: 0.78; } }
+  @keyframes shadeUp    { from { opacity: 0.78; } to { opacity: 0; } }
+
+  /* ---------------- 冒号 ---------------- */
+  .colon {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: calc(var(--cw) * 0.16);
+    height: var(--ch);
+    flex: none;
+  }
+
+  .colon i {
+    display: block;
+    width: calc(var(--cw) * 0.12);
+    height: calc(var(--cw) * 0.12);
+    border-radius: calc(var(--cw) * 0.035);
+    background: linear-gradient(180deg, var(--colon-1) 0%, var(--colon-2) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.6);
+  }
+
+  /* ---------------- 设置按钮（靠近才出现） ---------------- */
+  .gear {
+    position: fixed;
+    top: 22px;
+    right: 22px;
+    width: 46px;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: #5f6a76;
+    cursor: pointer;
+    opacity: 0;
+    transform: scale(0.86);
+    transition: opacity .35s ease, transform .35s ease, color .2s ease, background-color .2s ease;
+    z-index: 40;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .gear svg { width: 24px; height: 24px; display: block; }
+  .gear.visible,
+  body.panel-open .gear,
+  .gear:focus-visible {
+    opacity: 1;
+    transform: scale(1);
+  }
+  .gear:hover { color: #e8edf3; background: rgba(255, 255, 255, 0.06); }
+
+  @media (hover: none) {
+    .gear { opacity: 1; transform: none; }   /* 触屏设备常显 */
+  }
+
+  /* ---------------- 设置面板 ---------------- */
+  .panel {
+    position: fixed;
+    top: 78px;
+    right: 22px;
+    width: 300px;
+    max-height: calc(100vh - 104px);
+    overflow-y: auto;
+    padding: 14px 16px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    background: rgba(17, 21, 26, 0.92);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+    color: #dfe4ea;
+    font-size: 13px;
+    z-index: 40;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-8px) scale(0.98);
+    transition: opacity .22s ease, transform .22s ease, visibility .22s;
+  }
+  .panel.open { opacity: 1; visibility: visible; transform: none; }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: .04em;
+    color: #f2f5f8;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  .panel-close {
+    width: 24px; height: 24px;
+    border: none; border-radius: 7px;
+    background: transparent; color: #8b95a1;
+    font-size: 17px; line-height: 1; cursor: pointer;
+  }
+  .panel-close:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+
+  .panel section { padding: 12px 0 4px; }
+  .panel section + section { border-top: 1px solid rgba(255, 255, 255, 0.06); }
+  .panel h4 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: #6d7783;
+    margin-bottom: 8px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 9px 0;
+  }
+  .row .k { flex: none; width: 62px; color: #98a2ae; font-size: 12px; }
+  .row .grow { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+  .row .note { color: #6d7783; font-size: 11px; }
+
+  .panel input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 9px;
+    background: #0d1116;
+    color: #dfe4ea;
+    font-size: 12px;
+    outline: none;
+  }
+  .panel input[type="text"]::placeholder { color: #4d5661; }
+  .panel input[type="text"]:focus { border-color: #4b8ef7; }
+
+  .panel input[type="color"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 42px;
+    height: 27px;
+    padding: 2px;
+    border: none;
+    border-radius: 9px;
+    background: #0d1116;
+    cursor: pointer;
+  }
+  .panel input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+  .panel input[type="color"]::-webkit-color-swatch {
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 7px;
+  }
+  .panel input[type="color"]::-moz-color-swatch {
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 7px;
+  }
+
+  .panel input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    height: 4px;
+    border-radius: 3px;
+    accent-color: #4b8ef7;
+    background: rgba(255, 255, 255, 0.12);
+    cursor: pointer;
+  }
+  .val { flex: none; width: 46px; text-align: right; color: #7d8792; font-size: 11px; font-style: normal; }
+  #idleVal { width: 66px; }
+  #idleVal.test { color: #d9a441; }
+
+  .chips { flex-wrap: wrap; gap: 6px; }
+  .btn.chip { padding: 4px 9px; border-radius: 999px; font-size: 11px; }
+  .btn.chip.on { background: #2a5fd0; border-color: #3f74e0; color: #ffffff; }
+
+  .panel select {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 9px;
+    background: #0d1116;
+    color: #dfe4ea;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+  }
+  .panel select:focus { border-color: #4b8ef7; }
+
+  /* 开关 */
+  .switch { position: relative; display: inline-block; width: 38px; height: 21px; flex: none; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch span {
+    position: absolute; inset: 0;
+    border-radius: 999px;
+    background: #2a323c;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: background-color .2s ease;
+    cursor: pointer;
+  }
+  .switch span::after {
+    content: '';
+    position: absolute; top: 2px; left: 2px;
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    background: #98a2ae;
+    transition: transform .2s ease, background-color .2s ease;
+  }
+  .switch input:checked + span { background: #2a5fd0; border-color: #3f74e0; }
+  .switch input:checked + span::after { transform: translateX(17px); background: #ffffff; }
+
+  .btn {
+    padding: 7px 11px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 9px;
+    background: #222932;
+    color: #dfe4ea;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color .18s ease, border-color .18s ease;
+  }
+  .btn:hover { background: #2c353f; border-color: rgba(255, 255, 255, 0.16); }
+  .btn.ghost { background: transparent; color: #98a2ae; }
+  .btn.ghost:hover { background: rgba(255, 255, 255, 0.06); color: #dfe4ea; }
+  .btn.wide { width: 100%; margin-top: 8px; }
+
+  .hint { margin-top: 10px; color: #5b6470; font-size: 11px; line-height: 1.5; }
+  .hint.warn { color: #b58b4a; }
+
+  /* ---------------- 屏保内 Alt 提示条 ---------------- */
+  .alt-hint {
+    position: fixed;
+    left: 50%;
+    bottom: 34px;
+    transform: translateX(-50%);
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    background: rgba(17, 21, 26, 0.86);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: #cfd6de;
+    font-size: 12px;
+    letter-spacing: .02em;
+    white-space: nowrap;
+    z-index: 45;
+    pointer-events: none;
+  }
+  html.ov.alt .alt-hint,
+  html.ov.panel-hold .alt-hint { display: flex; }
+  .alt-hint b { color: #ffffff; font-weight: 600; }
+  .alt-hint kbd {
+    padding: 1px 6px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.08);
+    font-family: inherit;
+    font-size: 11px;
+    color: #fff;
+  }
+
+  @media (max-width: 520px) {
+    .panel { left: 14px; right: 14px; width: auto; top: 74px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage">
+  <div class="bg-photo"></div>
+  <div class="bg-mask"></div>
+  <div class="clock" id="clock"></div>
+</div>
+
+<button class="gear" id="gear" type="button" aria-label="外观设置" aria-expanded="false">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="3"></circle>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+  </svg>
+</button>
+
+<div class="panel" id="panel" role="dialog" aria-label="外观设置" aria-hidden="true">
+  <div class="panel-head">
+    <span>外观设置</span>
+    <button class="panel-close" id="panelClose" type="button" aria-label="关闭">×</button>
+  </div>
+
+  <section>
+    <h4>背景</h4>
+    <div class="row">
+      <span class="k">背景颜色</span>
+      <span class="grow"><input type="color" id="bgColor" value="#000000" aria-label="背景颜色"></span>
+    </div>
+    <div class="row">
+      <span class="k">背景图片</span>
+      <span class="grow">
+        <input type="file" id="bgFile" accept="image/*" hidden>
+        <button class="btn" id="pickFile" type="button">选择图片</button>
+        <button class="btn ghost" id="clearImg" type="button">清除</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="k">图片链接</span>
+      <span class="grow"><input type="text" id="bgUrl" placeholder="粘贴图片 URL 后回车"></span>
+    </div>
+    <div class="row">
+      <span class="k">图片蒙版</span>
+      <span class="grow">
+        <input type="range" id="bgMask" min="0" max="90" step="1" value="30" aria-label="图片蒙版">
+        <em class="val" id="bgMaskVal">30%</em>
+      </span>
+    </div>
+  </section>
+
+  <section>
+    <h4>卡片</h4>
+    <div class="row">
+      <span class="k">卡片颜色</span>
+      <span class="grow"><input type="color" id="cardColor" value="#232a33" aria-label="卡片颜色"></span>
+    </div>
+    <div class="row">
+      <span class="k">中缝</span>
+      <span class="grow note">随卡片颜色自动加深</span>
+    </div>
+  </section>
+
+  <section>
+    <h4>数字</h4>
+    <div class="row">
+      <span class="k">数字颜色</span>
+      <span class="grow"><input type="color" id="digitColor" value="#ffffff" aria-label="数字颜色"></span>
+    </div>
+  </section>
+
+  <section id="idleSection" hidden>
+    <h4>空闲跳出（屏保）</h4>
+    <div class="row">
+      <span class="k">启用</span>
+      <span class="grow"><label class="switch"><input type="checkbox" id="idleEnabled"><span></span></label></span>
+    </div>
+    <div class="row">
+      <span class="k">空闲时长</span>
+      <span class="grow">
+        <input type="range" id="idleSeconds" min="10" max="3600" step="5" value="600" aria-label="空闲时长（秒）">
+        <em class="val" id="idleVal">10 分</em>
+      </span>
+    </div>
+    <div class="row">
+      <span class="k">快捷</span>
+      <span class="grow chips">
+        <button class="btn chip" type="button" data-sec="30" title="测试用：空闲 30 秒就跳出">30 秒</button>
+        <button class="btn chip" type="button" data-sec="60">1 分</button>
+        <button class="btn chip" type="button" data-sec="300">5 分</button>
+        <button class="btn chip" type="button" data-sec="600">10 分</button>
+        <button class="btn chip" type="button" data-sec="1800">30 分</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="k">显示屏幕</span>
+      <span class="grow">
+        <select id="idleMonitor" aria-label="显示屏幕">
+          <option value="cursor">鼠标所在屏幕</option>
+          <option value="primary">主屏幕</option>
+          <option value="all">全部屏幕</option>
+        </select>
+      </span>
+    </div>
+    <p class="hint" id="idleStatus">状态读取中…</p>
+  </section>
+
+  <button class="btn wide ghost" id="reset" type="button">恢复默认配色</button>
+  <p class="hint" id="idleHint" hidden>空闲跳出需要由 <b>start.bat</b> 启动本地服务后，在 <b>settings.bat</b> 打开的配置页里设置（当前页面未连接到服务）。</p>
+  <p class="hint">设置会自动保存在本机浏览器；背景图片以本地数据保存，过大时可能无法持久化。</p>
+</div>
+
+<div class="alt-hint" id="altHint">
+  <kbd id="hintKey">Alt</kbd>
+  <span id="hintText">已按住 · 可直接在此界面改配色并实时预览 · <b>松开 Alt 后移动鼠标即退出</b></span>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================= 翻页时钟 ================= */
+  /* ---- 时间常量（原来散落在各处，集中在这里便于调整） ---- */
+  var DURATION = 600;              // 与 CSS (--dur * 2) 对齐的整段动画时长
+  var SECOND_SLACK_MS = 4;         // 对齐整秒时的正偏移，避免边界抖动
+  var FADE_IN_MS = 600;            // 屏保淡入
+  var FADE_OUT_MS = 320;           // 屏保淡出（随后宿主才隐藏窗口）
+  var ACK_FALLBACK_MS = 500;       // 等 transitionend 的兜底时长，超时就直接回 ack
+  var POLL_INTERVAL_MS = 200;      // 屏保页轮询 /__state
+  var POLL_RETRY_MS = 1000;        // 轮询失败后的重试间隔
+  var CONFIG_POLL_MS = 1000;       // 设置页轮询 /__state
+  var CONFIG_RETRY_MS = 3000;      // 设置页连不上宿主时的重试间隔
+  var HOLD_RENEW_MS = 1000;        // 面板「保持显示」的续期间隔（宿主侧 3 秒超时）
+  var CURSOR_HIDE_DELAY_MS = 1500; // 普通网页全屏后自动隐藏指针的延时
+
+  var clock = document.getElementById('clock');
+  var cards = [];
+  var timer = null;
+
+  var cardTemplate =
+    '<div class="half top"><span>0</span></div>' +
+    '<div class="half bottom"><span>0</span></div>' +
+    '<div class="flap flap-top"><span>0</span></div>' +
+    '<div class="flap flap-bottom"><span>0</span></div>' +
+    '<div class="seam"></div>';
+
+  function createCard() {
+    var el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = cardTemplate;
+    el.querySelector('.half.top span').textContent = '0';
+    el.querySelector('.half.bottom span').textContent = '0';
+    el.querySelector('.flap-top span').textContent = '0';
+    el.querySelector('.flap-bottom span').textContent = '0';
+    return el;
+  }
+
+  function createColon() {
+    var el = document.createElement('div');
+    el.className = 'colon';
+    el.innerHTML = '<i></i><i></i>';
+    return el;
+  }
+
+  function pad(n) {
+    return n < 10 ? '0' + n : String(n);
+  }
+
+  function setDigit(card, next) {
+    var cur = card.dataset.digit;
+
+    var topEl = card.querySelector('.half.top span');
+    var botEl = card.querySelector('.half.bottom span');
+    var flapTop = card.querySelector('.flap-top');
+    var flapBot = card.querySelector('.flap-bottom');
+
+    // 首次渲染：直接落位，不翻页
+    if (cur === undefined) {
+      card.dataset.digit = next;
+      topEl.textContent = next;
+      botEl.textContent = next;
+      flapTop.firstElementChild.textContent = next;
+      flapBot.firstElementChild.textContent = next;
+      return;
+    }
+
+    if (cur === next) return;
+    card.dataset.digit = next;
+
+    // 旧数字的上半部分向下翻转；新数字的下半部分从背面翻转出现
+    flapTop.firstElementChild.textContent = cur;
+    flapBot.firstElementChild.textContent = next;
+
+    topEl.textContent = next;   // 上半部分立即换成新数字（被翻页片遮住）
+    botEl.textContent = cur;    // 下半部分保持旧数字，直到被翻页片覆盖
+
+    card.classList.remove('flipping');
+    void card.offsetWidth;      // 强制重排以重启动画
+    card.classList.add('flipping');
+
+    clearTimeout(card._timer);
+    card._timer = setTimeout(function () {
+      botEl.textContent = next;
+      card.classList.remove('flipping');
+    }, DURATION);
+  }
+
+  function render() {
+    var now = new Date();
+    var str = pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+    for (var i = 0; i < cards.length; i++) {
+      setDigit(cards[i], str.charAt(i));
+    }
+    clearTimeout(timer);
+    timer = setTimeout(render, 1000 - (Date.now() % 1000) + SECOND_SLACK_MS); // 对齐整秒，避免漂移
+  }
+
+  // 组装 6 位数字 + 2 个冒号
+  for (var i = 0; i < 6; i++) {
+    if (i === 2 || i === 4) clock.appendChild(createColon());
+    var card = createCard();
+    clock.appendChild(card);
+    cards.push(card);
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) {
+      clearTimeout(timer);
+      render();
+    }
+  });
+
+  render();
+
+  /* ================= 配色工具 ================= */
+  function clamp255(v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+
+  function hex2rgb(hex) {
+    var h = String(hex).replace('#', '').trim();
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) h = '000000';
+    return [
+      parseInt(h.slice(0, 2), 16),
+      parseInt(h.slice(2, 4), 16),
+      parseInt(h.slice(4, 6), 16)
+    ];
+  }
+
+  function rgb2hex(rgb) {
+    return '#' + rgb.map(function (v) {
+      var s = clamp255(Math.round(v)).toString(16);
+      return s.length < 2 ? '0' + s : s;
+    }).join('');
+  }
+
+  // t 为目标色占比：mix('#232a33', '#ffffff', 0.1) 即提亮 10%
+  function mix(a, b, t) {
+    var A = hex2rgb(a), B = hex2rgb(b);
+    return rgb2hex([
+      A[0] + (B[0] - A[0]) * t,
+      A[1] + (B[1] - A[1]) * t,
+      A[2] + (B[2] - A[2]) * t
+    ]);
+  }
+
+  function rgba(hex, alpha) {
+    var c = hex2rgb(hex);
+    return 'rgba(' + c[0] + ', ' + c[1] + ', ' + c[2] + ', ' + alpha + ')';
+  }
+
+  /* ================= 主题状态 ================= */
+  var STORE_KEY = 'flipclock.theme.v1';
+  var DEFAULT_THEME = {
+    bg: '#000000',
+    img: '',
+    mask: 30,
+    card: '#232a33',
+    digit: '#ffffff'
+  };
+
+  var theme = {
+    bg: DEFAULT_THEME.bg,
+    img: DEFAULT_THEME.img,
+    mask: DEFAULT_THEME.mask,
+    card: DEFAULT_THEME.card,
+    digit: DEFAULT_THEME.digit
+  };
+
+  function loadTheme() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return;
+      var obj = JSON.parse(raw);
+      if (obj && typeof obj === 'object') {
+        if (typeof obj.bg === 'string') theme.bg = obj.bg;
+        if (typeof obj.img === 'string') theme.img = obj.img;
+        if (typeof obj.mask === 'number') theme.mask = obj.mask;
+        if (typeof obj.card === 'string') theme.card = obj.card;
+        if (typeof obj.digit === 'string') theme.digit = obj.digit;
+      }
+    } catch (e) { /* 忽略损坏的本地数据 */ }
+  }
+
+  function saveTheme() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(theme));
+    } catch (e) {
+      /* 背景图片过大导致超出配额：本次会话内仍然生效，只是不持久化 */
+    }
+  }
+
+  // 背景图片只接受安全来源：data:image/、http(s): 或站内相对路径。
+  // 别的值（含 javascript: 之类）一律忽略，回退成无背景图。
+  function safeImgUrl(url) {
+    if (typeof url !== 'string') return '';
+    var u = url.trim();
+    if (!u) return '';
+    if (/^data:image\//i.test(u)) return u;
+    if (/^https?:\/\//i.test(u)) return u;
+    if (/^[a-zA-Z0-9._~%/-]+$/.test(u)) return u;     // 相对路径（无 scheme、无引号括号）
+    return '';
+  }
+
+  function applyTheme() {
+    var r = document.documentElement.style;
+    r.setProperty('--bg', theme.bg);
+    var img = safeImgUrl(theme.img);
+    r.setProperty('--bg-img', img ? 'url("' + img + '")' : 'none');
+    r.setProperty('--bg-mask', String(theme.mask / 100));
+
+    // 卡片上下两半由基底色推导，保留极微弱的立体明暗差
+    r.setProperty('--card-top-1', mix(theme.card, '#ffffff', 0.10));
+    r.setProperty('--card-top-2', mix(theme.card, '#ffffff', 0.01));
+    r.setProperty('--card-bot-1', mix(theme.card, '#000000', 0.05));
+    r.setProperty('--card-bot-2', mix(theme.card, '#000000', 0.16));
+
+    // 冒号与中缝
+    r.setProperty('--colon-1', mix(theme.card, '#ffffff', 0.07));
+    r.setProperty('--colon-2', mix(theme.card, '#000000', 0.12));
+    r.setProperty('--seam', mix(theme.card, '#000000', 0.78));
+
+    // 数字与辉光
+    r.setProperty('--digit', theme.digit);
+    r.setProperty('--glow', rgba(theme.digit, 0.12));
+  }
+
+  /* ================= 设置面板 ================= */
+  var gear = document.getElementById('gear');
+  var panel = document.getElementById('panel');
+  var panelClose = document.getElementById('panelClose');
+  var bgColor = document.getElementById('bgColor');
+  var bgFile = document.getElementById('bgFile');
+  var pickFile = document.getElementById('pickFile');
+  var clearImg = document.getElementById('clearImg');
+  var bgUrl = document.getElementById('bgUrl');
+  var bgMask = document.getElementById('bgMask');
+  var bgMaskVal = document.getElementById('bgMaskVal');
+  var cardColor = document.getElementById('cardColor');
+  var digitColor = document.getElementById('digitColor');
+  var resetBtn = document.getElementById('reset');
+
+  function syncInputs() {
+    bgColor.value = theme.bg;
+    cardColor.value = theme.card;
+    digitColor.value = theme.digit;
+    bgMask.value = theme.mask;
+    bgMaskVal.textContent = theme.mask + '%';
+    bgUrl.value = /^data:/.test(theme.img) ? '' : theme.img;
+  }
+
+  function commit() {
+    applyTheme();
+    saveTheme();
+    pushTheme();
+  }
+
+  /* ---- 与宿主同步配色：宿主是权威源，localStorage 只是离线缓存 ---- */
+  var hostThemeRev = 0;
+
+  function pushTheme() {
+    api('__theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(theme)
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.rev) hostThemeRev = d.rev;
+    }).catch(function () { /* 没有宿主时静默降级到 localStorage */ });
+  }
+
+  function applyHostTheme(data) {
+    if (!data || !data.theme) return;
+    ['bg', 'img', 'mask', 'card', 'digit'].forEach(function (k) {
+      if (data.theme[k] !== undefined) theme[k] = data.theme[k];
+    });
+    if (data.rev) hostThemeRev = data.rev;
+    applyTheme();
+    syncInputs();
+    saveTheme();
+  }
+
+  function fetchHostTheme() {
+    return api('__theme').then(function (r) { return r.json(); })
+      .then(function (d) { applyHostTheme(d); return d; })
+      .catch(function () { return null; });
+  }
+
+  function syncThemeRev(rev) {
+    if (!rev) return;
+    if (hostThemeRev === 0) { hostThemeRev = rev; return; }
+    if (rev !== hostThemeRev) fetchHostTheme();
+  }
+
+  /* --- 图标：鼠标靠近才显示 --- */
+  var manualMode = false;            // 宿主 --manual：立即显示、不自动退出
+  var SHOW_RADIUS = 160;
+  var mx = -9999, my = -9999, ticking = false;
+
+  function nearGear() {
+    var rect = gear.getBoundingClientRect();
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    var dx = mx - cx, dy = my - cy;
+    return Math.sqrt(dx * dx + dy * dy) <= SHOW_RADIUS;
+  }
+
+  function updateGearVisibility() {
+    gear.classList.toggle('visible', nearGear() || panel.classList.contains('open'));
+  }
+
+  document.addEventListener('mousemove', function (e) {
+    mx = e.clientX;
+    my = e.clientY;
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () {
+      ticking = false;
+      updateGearVisibility();
+      refreshHold();
+    });
+  });
+
+  document.addEventListener('mouseleave', function () {
+    mx = my = -9999;
+    updateGearVisibility();
+    refreshHold();
+  });
+
+  /* --- 面板开合 --- */
+  function openPanel() {
+    panel.classList.add('open');
+    panel.setAttribute('aria-hidden', 'false');
+    gear.setAttribute('aria-expanded', 'true');
+    document.body.classList.add('panel-open');
+    // 光标位置未知时（例如用 #settings 深链打开），默认当作在面板内
+    if (mx < -1000 || my < -1000) {
+      var r = panel.getBoundingClientRect();
+      mx = r.left + r.width / 2;
+      my = r.top + 60;
+    }
+    updateGearVisibility();
+    refreshHold();
+    reportPage();
+  }
+
+  function closePanel() {
+    panel.classList.remove('open');
+    panel.setAttribute('aria-hidden', 'true');
+    gear.setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('panel-open');
+    updateGearVisibility();
+    refreshHold();
+    reportPage();
+  }
+
+  gear.addEventListener('click', function () {
+    if (panel.classList.contains('open')) closePanel(); else openPanel();
+  });
+
+  panelClose.addEventListener('click', closePanel);
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (panel.classList.contains('open')) { closePanel(); return; }
+    // 手动模式：Esc 直接关掉整个时钟（宿主收到后清理退出）
+    if (manualMode) api('__exit', { method: 'POST' }).catch(function () {});
+  });
+
+  // 点击面板之外关闭
+  document.addEventListener('pointerdown', function (e) {
+    if (!panel.classList.contains('open')) return;
+    if (panel.contains(e.target) || gear.contains(e.target)) return;
+    closePanel();
+  });
+
+  /* --- 背景颜色 --- */
+  bgColor.addEventListener('input', function () {
+    theme.bg = bgColor.value;
+    commit();
+  });
+
+  /* --- 背景图片：本地文件 --- */
+  pickFile.addEventListener('click', function () { bgFile.click(); });
+
+  bgFile.addEventListener('change', function () {
+    var file = bgFile.files && bgFile.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      theme.img = String(reader.result);
+      bgUrl.value = '';
+      commit();
+    };
+    reader.readAsDataURL(file);
+    bgFile.value = '';
+  });
+
+  /* --- 背景图片：URL --- */
+  bgUrl.addEventListener('change', function () {
+    var url = bgUrl.value.trim();
+    theme.img = url;
+    commit();
+  });
+
+  /* --- 清除背景图片 --- */
+  clearImg.addEventListener('click', function () {
+    theme.img = '';
+    bgUrl.value = '';
+    commit();
+  });
+
+  /* --- 图片蒙版 --- */
+  bgMask.addEventListener('input', function () {
+    theme.mask = Number(bgMask.value);
+    bgMaskVal.textContent = theme.mask + '%';
+    applyTheme();
+  });
+  bgMask.addEventListener('change', saveTheme);
+
+  /* --- 卡片颜色 --- */
+  cardColor.addEventListener('input', function () {
+    theme.card = cardColor.value;
+    commit();
+  });
+
+  /* --- 数字颜色 --- */
+  digitColor.addEventListener('input', function () {
+    theme.digit = digitColor.value;
+    commit();
+  });
+
+  /* --- 恢复默认 --- */
+  resetBtn.addEventListener('click', function () {
+    theme.bg = DEFAULT_THEME.bg;
+    theme.img = DEFAULT_THEME.img;
+    theme.mask = DEFAULT_THEME.mask;
+    theme.card = DEFAULT_THEME.card;
+    theme.digit = DEFAULT_THEME.digit;
+    syncInputs();
+    commit();
+  });
+
+  /* ================= 与本地宿主（屏保服务）通信 ================= */
+  var params = new URLSearchParams(location.search);
+  var OVERLAY = params.get('overlay') === '1';
+  var TOKEN = params.get('t') || '';
+  // 窗口标识：只用来让宿主认出自己的窗口（会出现在窗口标题里，所以**不是**鉴权凭证）
+  var WINDOW_TAG = params.get('w') || '';
+  var stage = document.getElementById('stage');
+  var idleSection = document.getElementById('idleSection');
+  var idleEnabled = document.getElementById('idleEnabled');
+  var idleSeconds = document.getElementById('idleSeconds');
+  var idleVal = document.getElementById('idleVal');
+  var idleChips = Array.prototype.slice.call(document.querySelectorAll('.chips .chip'));
+  var idleMonitor = document.getElementById('idleMonitor');
+  var idleStatus = document.getElementById('idleStatus');
+  var idleHint = document.getElementById('idleHint');
+
+  if (OVERLAY) {
+    document.documentElement.classList.add('ov');
+    // 标题里只放非敏感的窗口标识，token 不进标题（同机进程可枚举窗口标题）
+    if (WINDOW_TAG) document.title = 'FlipClockOverlay-' + WINDOW_TAG;
+  }
+
+  // 所有请求都带上本次运行的 token（宿主改配置类接口要求它；地址栏直接打开时由宿主 302 补上）
+  function api(path, opts) {
+    var o = Object.assign({ cache: 'no-store' }, opts || {});
+    if (TOKEN) {
+      o.headers = Object.assign({}, o.headers || {}, { 'X-FlipClock-Token': TOKEN });
+    }
+    return fetch(path, o);
+  }
+
+  function fade(inFlag) {
+    // 淡入 ~600ms，淡出 ~320ms（随后宿主才隐藏窗口）
+    stage.style.transitionDuration = (inFlag ? FADE_IN_MS : FADE_OUT_MS) + 'ms';
+    stage.style.opacity = inFlag ? '1' : '0';
+  }
+
+  /* ---- 屏保窗口：跟随宿主状态淡入淡出 ---- */
+  var ovLast = null;
+
+  // 淡出真的结束（transitionend，带 500ms 兜底）后再回 ack，宿主收到才隐藏窗口。
+  // 直接定时 360ms 会跟轮询抖动叠加，偶尔超出宿主的等待时间，看起来像"硬切"。
+  function ackFadeOut() {
+    var done = false;
+    function fire(e) {
+      if (e && (e.target !== stage || e.propertyName !== 'opacity')) return;   // 忽略子元素冒泡
+      if (done) return;
+      done = true;
+      stage.removeEventListener('transitionend', fire);
+      api('__ack', { method: 'POST' }).catch(function () {});
+    }
+    stage.addEventListener('transitionend', fire);
+    setTimeout(function () { fire(null); }, ACK_FALLBACK_MS);
+  }
+
+  function pollOverlay() {
+    api('__state').then(function (r) { return r.json(); }).then(function (s) {
+      var v = !!s.visible;
+      setAlt(!!s.alt);            // Alt 状态以宿主为准（不依赖焦点/键盘事件）
+      syncThemeRev(s.themeRev);
+      applyCursor(s.cursor !== false);      // 宿主掌管全屏期间的指针显隐
+      if (s.manual && !manualMode) {
+        manualMode = true;
+        document.documentElement.classList.add('manual');
+        postHold(true);
+        updateHint();
+        reportPage();
+      }
+      if (ovLast === null) {
+        fade(v);
+      } else if (ovLast !== v) {
+        fade(v);
+        if (!v && !manualMode) {
+          // 屏保已隐藏：清掉面板保持标记，并通知宿主可以隐藏窗口了
+          panelHold = false;
+          document.documentElement.classList.remove('panel-hold');
+          postHold(false);
+          ackFadeOut();
+        } else if (!v) {
+          ackFadeOut();
+        }
+      }
+      ovLast = v;
+      setTimeout(pollOverlay, POLL_INTERVAL_MS);
+    }).catch(function () {
+      setTimeout(pollOverlay, POLL_RETRY_MS);
+    });
+  }
+
+  /* 全屏显示期间隐藏鼠标箭头（由 /__state.cursor 驱动） */
+  function applyCursor(show) {
+    document.documentElement.classList.toggle('nocursor', !show);
+    reportPage();
+  }
+
+  /* 把页面自己的状态回报给宿主（/__state.page），方便宿主日志与自测核对 */
+  var pageLast = '';
+
+  function reportPage() {
+    if (!OVERLAY) return;
+    var now = [
+      'manual=' + (manualMode ? 1 : 0),
+      'nocursor=' + (document.documentElement.classList.contains('nocursor') ? 1 : 0),
+      'panel=' + (panel.classList.contains('open') ? 1 : 0)
+    ].join('&');
+    if (now === pageLast) return;
+    pageLast = now;
+    api('__page', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        manual: manualMode,
+        nocursor: document.documentElement.classList.contains('nocursor'),
+        panel: panel.classList.contains('open')
+      })
+    }).catch(function () { /* 没有宿主时忽略 */ });
+  }
+
+  /* 普通网页模式：F11 / 全屏 API 之后同样自动隐藏指针，动一下鼠标临时显示 */
+  var fsTimer = null;
+
+  function isFullscreenNow() {
+    if (document.fullscreenElement) return true;
+    // F11 / kiosk：视口正好等于整块屏幕（窗口化或最大化时高度会少一个浏览器工具栏）
+    return Math.abs(window.innerWidth - screen.width) <= 2 &&
+           Math.abs(window.innerHeight - screen.height) <= 2;
+  }
+
+  function fullscreenCursor() {
+    document.documentElement.classList.remove('nocursor');
+    clearTimeout(fsTimer);
+    if (!isFullscreenNow()) return;
+    fsTimer = setTimeout(function () {
+      if (isFullscreenNow()) document.documentElement.classList.add('nocursor');
+    }, CURSOR_HIDE_DELAY_MS);
+  }
+
+  if (!OVERLAY) {
+    window.addEventListener('mousemove', fullscreenCursor);
+    window.addEventListener('resize', fullscreenCursor);
+    document.addEventListener('fullscreenchange', fullscreenCursor);
+    document.addEventListener('keydown', fullscreenCursor);
+    fullscreenCursor();
+  }
+
+  /* ---- 按住 Alt：屏保界面保持不退，并临时开放设置入口 ---- */
+  var altOn = false;
+
+  function setAlt(on) {
+    on = !!on;
+    if (on === altOn) return;
+    altOn = on;
+    document.documentElement.classList.toggle('alt', on);
+    updateGearVisibility();
+    updateHint();
+  }
+
+  document.addEventListener('keydown', function (e) { if (e.key === 'Alt') setAlt(true); });
+  document.addEventListener('keyup', function (e) { if (e.key === 'Alt') setAlt(false); });
+  window.addEventListener('blur', function () { setAlt(false); });
+
+  /* ---- 设置面板「保持显示」：鼠标只要还在面板（或齿轮）范围内，就不退出屏保 ---- */
+  var panelHold = false;
+  var hintKey = document.getElementById('hintKey');
+  var hintText = document.getElementById('hintText');
+
+  function postHold(on) {
+    api('__hold', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hold: !!on })
+    }).catch(function () { /* 没有宿主时忽略 */ });
+  }
+
+  function updateHint() {
+    if (manualMode) {
+      hintKey.style.display = 'none';
+      hintText.innerHTML = '手动时钟 · <b>按 Esc 退出</b> · 点右上角齿轮改配色 · 鼠标停 3 秒自动隐藏指针';
+    } else if (altOn) {
+      hintKey.style.display = '';
+      hintKey.textContent = 'Alt';
+      hintText.innerHTML = '已按住 · 可直接在此界面改配色并实时预览 · <b>松开 Alt 后移动鼠标即退出</b>';
+    } else if (panelHold) {
+      hintKey.style.display = 'none';
+      hintText.innerHTML = '设置面板已固定 · 无需按住 Alt · <b>鼠标移出面板即退出屏保</b>';
+    }
+  }
+
+  function pointIn(rect, margin) {
+    return mx >= rect.left - margin && mx <= rect.right + margin &&
+           my >= rect.top - margin && my <= rect.bottom + margin;
+  }
+
+  function refreshHold() {
+    if (!OVERLAY) return;                       // 普通页面不需要
+    if (manualMode) {
+      // 手动模式：永不自动退出，鼠标随便动（面板开合照常）
+      if (!panelHold) {
+        panelHold = true;
+        postHold(true);
+      }
+      return;
+    }
+    var inside = false;
+    if (panel.classList.contains('open')) {
+      inside = pointIn(panel.getBoundingClientRect(), 4) ||
+               pointIn(gear.getBoundingClientRect(), 4);
+    }
+    if (inside === panelHold) return;
+    panelHold = inside;
+    document.documentElement.classList.toggle('panel-hold', inside);
+    updateHint();
+    postHold(inside);
+  }
+
+  // 面板使用中每秒续期一次（宿主侧 3 秒超时，页面卡死也不会永久卡住屏保）
+  setInterval(function () { if (panelHold) postHold(true); }, HOLD_RENEW_MS);
+
+  /* ---- 配置页：读取/写入空闲跳出设置 ---- */
+  var idleDragging = false;
+
+  function fmtSecs(sec) {
+    sec = Math.max(0, Math.round(Number(sec) || 0));
+    if (sec < 60) return sec + ' 秒';
+    var m = Math.floor(sec / 60), r = sec % 60;
+    return r ? m + ' 分 ' + r + ' 秒' : m + ' 分';
+  }
+
+  function syncIdleUI(s) {
+    // 阈值以宿主返回的 threshold 为准（兼容旧的 idleMinutes 配置）
+    var thr = Number(s.threshold) || (Number(s.idleSeconds) || Number(s.idleMinutes) * 60 || 600);
+    if (!idleDragging) idleSeconds.value = thr;
+    idleEnabled.checked = !!s.enabled;
+    idleVal.textContent = fmtSecs(thr);
+    idleVal.classList.toggle('test', thr <= 60);
+    idleMonitor.value = s.monitor;
+    idleChips.forEach(function (b) {
+      b.classList.toggle('on', Math.abs(Number(b.getAttribute('data-sec')) - thr) < 1);
+    });
+    var extra = s.windowMode === 'kiosk' ? '真·全屏' : '应用窗口';
+    extra += s.keepBrowser ? ' · 常驻预热' : ' · 按需启动';
+    idleStatus.textContent = s.enabled
+      ? '服务运行中 · 当前已空闲 ' + Math.floor(s.idle) + ' 秒 · 阈值 ' + Math.round(thr) + ' 秒 · ' + extra
+      : '服务运行中 · 空闲跳出已关闭';
+  }
+
+  function pollConfig() {
+    api('__state').then(function (r) { return r.json(); }).then(function (s) {
+      idleSection.hidden = false;
+      idleHint.hidden = true;
+      syncIdleUI(s);
+      syncThemeRev(s.themeRev);
+      setTimeout(pollConfig, CONFIG_POLL_MS);
+    }).catch(function () {
+      idleSection.hidden = true;
+      idleHint.hidden = false;
+      // file:// 直接打开时探一次就够，避免刷错误；http 下持续重试等待服务启动
+      if (location.protocol === 'http:' || location.protocol === 'https:') {
+        setTimeout(pollConfig, CONFIG_RETRY_MS);
+      }
+    });
+  }
+
+  function pushConfig(partial) {
+    api('__config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial)
+    }).catch(function () {});
+  }
+
+  idleEnabled.addEventListener('change', function () {
+    pushConfig({ enabled: idleEnabled.checked });
+  });
+  idleSeconds.addEventListener('pointerdown', function () { idleDragging = true; });
+  window.addEventListener('pointerup', function () { idleDragging = false; });
+  idleSeconds.addEventListener('input', function () {
+    var v = Number(idleSeconds.value);
+    idleVal.textContent = fmtSecs(v);
+    idleVal.classList.toggle('test', v <= 60);
+    idleChips.forEach(function (b) {
+      b.classList.toggle('on', Math.abs(Number(b.getAttribute('data-sec')) - v) < 1);
+    });
+  });
+  idleSeconds.addEventListener('change', function () {
+    pushConfig({ idleSeconds: Number(idleSeconds.value) });
+  });
+  idleChips.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var v = Number(b.getAttribute('data-sec'));
+      idleSeconds.value = v;
+      idleVal.textContent = fmtSecs(v);
+      idleVal.classList.toggle('test', v <= 60);
+      idleChips.forEach(function (o) { o.classList.toggle('on', o === b); });
+      pushConfig({ idleSeconds: v });
+    });
+  });
+  idleMonitor.addEventListener('change', function () {
+    pushConfig({ monitor: idleMonitor.value });
+  });
+
+  /* ================= 启动 ================= */
+  loadTheme();
+  syncInputs();
+  applyTheme();
+
+  if (location.hash === '#settings') openPanel();
+
+  if (OVERLAY) {
+    pollOverlay();
+  } else {
+    pollConfig();
+  }
+  fetchHostTheme();      // 有宿主时以宿主的 theme.json 为准（离线自动忽略）
+})();
+</script>
+</body>
+</html>

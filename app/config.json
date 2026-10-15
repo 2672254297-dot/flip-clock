@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "idleSeconds": 600,
+  "idleMinutes": 10,
+  "monitor": "cursor",
+  "port": 8756,
+  "browser": "",
+  "windowMode": "kiosk",
+  "keepBrowser": true,
+  "prewarmSeconds": 20
+}
