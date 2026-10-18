@@ -12,6 +12,9 @@ __pycache__/
 # ---- 自测运行时产物（截图由测试现场生成，不入库）----
 tests/selftest-*.png
 tests/selftest-idle.txt
+tests/ios-shots/
+app/_iosprobe.html
+app/_ioswrap.html
 
 # ---- 编辑器 / 系统 ----
 .vscode/

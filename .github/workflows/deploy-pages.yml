@@ -1,0 +1,59 @@
+name: Deploy web clock to GitHub Pages
+
+# 把 app/ 里的网页版时钟发布到 GitHub Pages，
+# 这样 iPhone / iPad 上打开网址即可「添加到主屏幕」当 App 用。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/index.html'
+      - 'app/manifest.webmanifest'
+      - 'app/sw.js'
+      - 'app/*.png'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assemble site (只发布网页版需要的文件)
+        run: |
+          mkdir -p _site
+          cp app/index.html            _site/
+          cp app/manifest.webmanifest  _site/
+          cp app/sw.js                 _site/
+          cp app/apple-touch-icon.png  _site/
+          cp app/icon-192.png          _site/
+          cp app/icon-512.png          _site/
+          cp app/icon-maskable-512.png _site/
+          # 关闭 Jekyll 处理（纯静态站点，避免多余处理）
+          touch _site/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

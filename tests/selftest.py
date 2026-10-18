@@ -101,7 +101,7 @@ def skip(name, detail=""):
 
 
 def injection_works(port):
-    """先确认合成输入真的能送达（前台若是高完整性窗口，keybd_event 会被系统丢弃）。"""
+    """先确认合成键盘输入真的能送达（前台若是高完整性窗口，keybd_event 会被系统丢弃）。"""
     for _ in range(3):
         alt(True)
         time.sleep(0.35)
@@ -109,6 +109,25 @@ def injection_works(port):
         alt(False)
         time.sleep(0.25)
         if ok:
+            return True
+    return False
+
+
+# 齿轮中心相对视口右上角的 CSS 偏移：right/top = 14px 安全区 + 44px/2 = 36px
+GEAR_INSET = 36
+
+
+def mouse_injection_works(port, gx, gy):
+    """确认合成鼠标移动能送达页面：把指针移到齿轮感应区，页面应回报 gear=True。
+
+    与 injection_works（键盘）配对使用。鼠标与键盘可能一个通一个不通
+    （例如用户正在同时操作鼠标，或前台窗口只吞掉鼠标消息），
+    因此这里单独探测，避免把"输入没送到"误判成"点了没反应"。
+    """
+    for _ in range(3):
+        move_to(gx, gy)
+        time.sleep(0.35)
+        if (state(port) or {}).get("page", {}).get("gear"):
             return True
     return False
 
@@ -684,7 +703,18 @@ def open_panel_with_alt(port, x, y, css_w, s):
     alt(True)
     time.sleep(0.4)
     check("按住 Alt 时宿主上报 alt=True", bool((state(port) or {}).get("alt")))
-    gx, gy = x + (css_w - 45) * s, y + 45 * s
+
+    # 齿轮中心：CSS 里是 right/top = 14px + 44px/2 = 36px（含安全区变量，桌面为 0）
+    gx, gy = x + (css_w - GEAR_INSET) * s, y + GEAR_INSET * s
+
+    # 先确认合成鼠标输入真的能送达页面：把指针移到齿轮感应区，页面应回报 gear=True。
+    # 送不到（前台窗口权限更高、或用户正在用鼠标）时按环境问题跳过，而不是误报产品缺陷。
+    if not mouse_injection_works(port, gx, gy):
+        skip("面板保持（Alt 开设置 / 面板内不退出 / 移出即退出）",
+             "合成鼠标输入未能送达页面（页面未回报 gear=True）；"
+             "请让时钟窗口获得焦点、不要同时操作鼠标，再重跑 `python selftest.py`")
+        return False, (x + (css_w - 180) * s, y + 200 * s)
+
     inside = (x + (css_w - 180) * s, y + 200 * s)
     # 注意：再点一次齿轮是"关"面板，所以只在页面回报 panel=False 时才补点
     opened = False
@@ -959,6 +989,129 @@ def phase_code_health(args):
           and "document.title = 'FlipClockOverlay-' + TOKEN;" not in page)
 
 
+def phase_ios_web(args):
+    """12. iOS / 网页版（PWA）回归：静态检查，确保「添加到主屏幕」所需资产齐备且配置正确。
+
+    不启宿主、不开浏览器，纯文件检查，跑得很快。
+    """
+    step("12. iOS / 网页版回归：PWA 资产、iOS 适配、无空闲跳出")
+
+    with open(os.path.join(APP_DIR, "index.html"), "r", encoding="utf-8") as fh:
+        page = fh.read()
+
+    # ---- iOS 全屏与安全区 ----
+    check("viewport 含 viewport-fit=cover（否则刘海/横条会压住内容）",
+          "viewport-fit=cover" in page)
+    check("声明 apple-mobile-web-app-capable（添加到主屏幕后全屏）",
+          'name="apple-mobile-web-app-capable" content="yes"' in page)
+    check("声明 apple-mobile-web-app-status-bar-style",
+          "apple-mobile-web-app-status-bar-style" in page)
+    check("声明 apple-mobile-web-app-title（主屏幕显示名）",
+          "apple-mobile-web-app-title" in page)
+    check("使用 safe-area-inset 变量避开刘海/底部横条",
+          "env(safe-area-inset-top" in page and "env(safe-area-inset-bottom" in page)
+    check("使用动态视口单位 dvh/dvw（iOS 地址栏收放时尺寸不跳）",
+          "100dvh" in page and "100dvw" in page)
+    check("禁止页面被拖动/橡皮筋滚动", "overscroll-behavior: none" in page)
+    check("禁用长按选择与双击缩放",
+          "-webkit-touch-callout: none" in page and "touch-action: manipulation" in page)
+    check("尊重系统「减弱动态效果」", "prefers-reduced-motion" in page)
+
+    # ---- 卡片宽度自适应（竖屏不溢出） ----
+    check("卡片宽度按可用宽/高取小值（不再用固定 clamp 下限）",
+          "--cw: min(" in page)
+    check("卡片宽度公式按 6 卡 + 2 冒号 + 7 间距推导", "/ 7.36)" in page)
+
+    # ---- PWA 资产 ----
+    manifest_path = os.path.join(APP_DIR, "manifest.webmanifest")
+    check("存在 manifest.webmanifest", os.path.isfile(manifest_path))
+    manifest = {}
+    if os.path.isfile(manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            try:
+                manifest = json.load(fh)
+            except ValueError as e:
+                check("manifest.webmanifest 是合法 JSON", False, str(e))
+    check("manifest 含 name/short_name", bool(manifest.get("name")) and bool(manifest.get("short_name")))
+    check("manifest display=standalone（独立窗口，像原生 App）",
+          manifest.get("display") == "standalone")
+    check("manifest start_url 为相对路径（可部署在任意子目录）",
+          str(manifest.get("start_url", "")).startswith("./"))
+    check("manifest 背景/主题色为纯黑", manifest.get("background_color") == "#000000"
+          and manifest.get("theme_color") == "#000000")
+
+    icons = manifest.get("icons") or []
+    check("manifest 声明 3 个图标（192/512/maskable）", len(icons) == 3,
+          "实际 %d 个" % len(icons))
+    missing_icons = [i.get("src") for i in icons
+                     if not os.path.isfile(os.path.join(APP_DIR, str(i.get("src"))))]
+    check("manifest 里的图标文件都真实存在", not missing_icons, "缺失=%s" % missing_icons)
+    check("有 maskable 图标（Android 自适应）",
+          any(i.get("purpose") == "maskable" for i in icons))
+
+    for name, size in (("apple-touch-icon.png", 180), ("icon-192.png", 192),
+                       ("icon-512.png", 512), ("icon-maskable-512.png", 512)):
+        path = os.path.join(APP_DIR, name)
+        if not os.path.isfile(path):
+            check("图标 %s 存在" % name, False)
+            continue
+        with open(path, "rb") as fh:
+            head = fh.read(24)
+        # PNG 头 + IHDR 宽高（大端）
+        ok_png = head[:8] == b"\x89PNG\r\n\x1a\n"
+        got_w = int.from_bytes(head[16:20], "big") if ok_png and len(head) >= 24 else 0
+        got_h = int.from_bytes(head[20:24], "big") if ok_png and len(head) >= 24 else 0
+        check("图标 %s 是 %dx%d PNG" % (name, size, size),
+              ok_png and got_w == size and got_h == size,
+              "实际 %dx%d" % (got_w, got_h))
+
+    check("页面声明 apple-touch-icon", 'rel="apple-touch-icon"' in page)
+    check("页面声明 manifest", 'rel="manifest"' in page)
+    check("页面声明 theme-color", 'name="theme-color"' in page)
+
+    # ---- Service Worker（离线可用） ----
+    sw_path = os.path.join(APP_DIR, "sw.js")
+    check("存在 sw.js", os.path.isfile(sw_path))
+    if os.path.isfile(sw_path):
+        with open(sw_path, "r", encoding="utf-8") as fh:
+            sw = fh.read()
+        check("sw.js 预缓存核心资源", "PRECACHE" in sw and "index.html" in sw)
+        check("sw.js 不缓存本机控制接口（/__state 等）", "indexOf('__')" in sw)
+        check("sw.js 导航请求走「网络优先」（在线时能拿到最新页面）",
+              "req.mode === 'navigate'" in sw)
+    check("页面只在非本机站点注册 Service Worker（本机宿主不被缓存）",
+          "!IS_LOCAL_PAGE" in page and "serviceWorker.register" in page)
+
+    # ---- 网页版无「空闲跳出」 ----
+    check("页面区分 host / web 两种运行形态", "WEB_MODE" in page and "IS_LOCAL_PAGE" in page)
+    check("网页版进入纯钟模式时隐藏空闲设置",
+          "function enterStandaloneMode(" in page and "idleSection.hidden = true" in page)
+    check("页面标题可作主屏幕名称", "<title>翻页时钟</title>" in page)
+
+    # ---- 局域网服务脚本 ----
+    serve = os.path.join(PROJECT_ROOT, "tools", "serve-web.py")
+    check("存在 tools/serve-web.py（局域网免公网使用）", os.path.isfile(serve))
+    if os.path.isfile(serve):
+        with open(serve, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        check("serve-web.py 以 app/ 为静态根", 'os.path.join(ROOT, "app")' in body)
+
+    # ---- 图标生成器可复现 ----
+    maker = os.path.join(PROJECT_ROOT, "tools", "make-icons.py")
+    check("存在 tools/make-icons.py（图标可复现生成）", os.path.isfile(maker))
+
+    # ---- GitHub Pages 工作流 ----
+    wf = os.path.join(PROJECT_ROOT, ".github", "workflows", "deploy-pages.yml")
+    check("存在 Pages 部署工作流", os.path.isfile(wf))
+    if os.path.isfile(wf):
+        with open(wf, "r", encoding="utf-8") as fh:
+            y = fh.read()
+        check("工作流只发布网页版所需文件（不发布 Python 源码）",
+              "cp app/index.html" in y and "cp app/manifest.webmanifest" in y
+              and "cp app/sw.js" in y and "flipclock_overlay.py" not in y)
+        check("工作流不含 Tab（YAML 语法）", "\t" not in y)
+
+
 def phase_api_contract(args):
     """11. 接口协议回归（改进建议 3）：路由表必须与 API_CONTRACT 一致，且逐项可调用。"""
     step("11. 接口协议回归：路由表与协议表一致 + 每项按表可用")
@@ -1060,6 +1213,7 @@ def main(argv=None):
             security_phase(args)
             phase_robustness(args)
         phase_code_health(args)
+        phase_ios_web(args)
         if not args.keep:
             phase_api_contract(args)
         return summarize()

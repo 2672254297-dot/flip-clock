@@ -58,9 +58,64 @@
 
 ---
 
+## 📱 在 iPhone / iPad 上使用（网页版，不装 App）
+
+同一个 `app/index.html` 就是网页版：**没有任何依赖，打开就是一只全屏翻页时钟**，
+支持「添加到主屏幕」后像原生 App 一样独立全屏运行，**并且没有「几分钟不操作自动跳出」**。
+
+三种用法，任选其一：
+
+| 方式 | 适合 | 需要 |
+| --- | --- | --- |
+| **A. GitHub Pages（推荐）** | 手机随时可用，离线也能开 | 一次部署，之后一劳永逸 |
+| **B. 局域网** | 不想发布到公网 | 电脑和手机连同一个 Wi-Fi |
+| **C. 直接把 HTML 传到手机** | 完全不联网 | 用「文件」App 打开即可 |
+
+**方式 A：发布到 GitHub Pages（推荐）**
+
+仓库已自带工作流 `.github/workflows/deploy-pages.yml`，只要在仓库
+`Settings → Pages → Source` 选 **GitHub Actions**，之后往 `main` 推代码就会自动发布。
+发布后地址形如：
+
+```
+https://2672254297-dot.github.io/flip-clock/
+```
+
+手机上：**Safari 打开该地址 → 点「分享」→「添加到主屏幕」**。
+之后从主屏幕图标启动即为全屏、无地址栏；Service Worker 会把页面缓存下来，
+**飞行模式下也能打开**。
+
+**方式 B：局域网（不用公网）**
+
+```bat
+python tools\serve-web.py
+```
+
+脚本会打印形如 `http://192.168.1.5:8080` 的地址，在手机 Safari 里打开即可，
+同样可以「添加到主屏幕」。注意：局域网 http 不是安全上下文，离线缓存不会启用，
+且关掉脚本后手机就打不开了。
+
+**方式 C：把 HTML 传到手机**
+
+把 `app/index.html` 单独传到手机（AirDrop / iCloud / 微信文件传输），用 Safari 打开就是时钟。
+此方式图标与离线缓存不可用（`manifest` 与 `sw.js` 是独立文件），但时钟功能完整。
+
+**iOS 上专门做的适配**
+
+- `viewport-fit=cover` + `env(safe-area-inset-*)`：内容避开刘海 / 灵动岛 / 底部横条
+- 卡片尺寸由**可用宽与可用高共同决定**，iPhone 竖屏、横屏、iPad 各尺寸都不溢出
+- 用 `dvh` / `dvw` 动态视口单位，Safari 地址栏收放时尺寸不跳
+- 禁用橡皮筋滚动、长按选择、双击缩放，手感接近原生 App
+- 触屏设备上齿轮按钮常驻（半透明），点击区域 ≥44px
+- **屏幕常亮**：用 Screen Wake Lock 让手机/平板当桌面时钟时不自动熄屏
+  （iOS 16.4+ 支持；不支持时静默跳过）
+- 尊重系统「减弱动态效果」设置
+
+---
+
 ## 环境要求
 
-- Windows 10 / 11
+- Windows 10 / 11（**屏保功能**需要；只当网页时钟用的话任何平台都行）
 - Python 3（[python.org](https://www.python.org/downloads/) 安装时勾选 *Add python.exe to PATH*）
 - Microsoft Edge 或 Google Chrome（自动探测常见安装路径）
 
@@ -139,7 +194,7 @@ flip-clock\
 ├── settings.bat         启动项：打开设置页
 ├── stop.bat             结束项：停止服务
 ├── clean.bat            结束项：停止服务并清缓存
-├── app\                 程序本体
+├── app\                 程序本体 + 网页版（同一份 index.html）
 │   ├── flipclock_overlay.py   入口：CLI + 再导出
 │   ├── flipclock_app.py       状态机 App（空闲判定 / 显示隐藏 / 保持 / 指针）
 │   ├── flipclock_http.py      本地 HTTP 控制接口 + 端口工具
@@ -147,12 +202,18 @@ flip-clock\
 │   ├── flipclock_win32.py     Win32 封装（窗口 / DPI / 光标 / 空闲 / 进程）
 │   ├── flipclock_browser.py   浏览器进程查找与清理
 │   ├── flipclock_common.py    路径、常量、日志
-│   ├── index.html             时钟本体（HTML/CSS/JS 单文件）
+│   ├── index.html             时钟本体（HTML/CSS/JS 单文件，桌面 + iOS 通用）
+│   ├── manifest.webmanifest   PWA 清单（添加到主屏幕）
+│   ├── sw.js                  Service Worker（离线可用）
+│   ├── apple-touch-icon.png   iOS 主屏幕图标
+│   ├── icon-192.png / icon-512.png / icon-maskable-512.png
 │   ├── config.json            运行参数（自动生成）
 │   └── theme.json             配色（自动生成）
 ├── docs\                详细文档与代码审查报告
 ├── previews\            效果截图
-└── tests\               端到端自测（selftest.py）+ 30 秒测试脚本
+├── tools\               辅助脚本（图标生成 / 局域网服务 / iOS 布局检查）
+├── tests\               端到端自测（selftest.py）+ 30 秒测试脚本
+└── .github\workflows\   GitHub Pages 自动发布
 ```
 
 **不要单独移动 `app\` 里的文件**——移动后要同步修改根目录启动脚本里的 `app\flipclock_overlay.py` 路径。
@@ -178,6 +239,8 @@ python tests\selftest.py --no-shot  :: 不截图
 
 ## 已知限制
 
+- **「空闲跳出」是 Windows 专属**：它靠 `GetLastInputInfo` + 窗口置顶实现。
+  网页版 / iOS 上没有宿主进程，因此**不存在自动跳出**，就是一只纯时钟（这也是在手机上想要的形态）。
 - **不是真正的 `.scr` 屏保程序**：本质是一个 kiosk 浏览器窗口 + Python 宿主，
   任务管理器里能看到 `msedge.exe`（用项目专属 profile，与你自己的浏览器完全隔离）。
 - 屏保**不锁定**电脑，也不做密码保护，只负责显示。
@@ -185,6 +248,11 @@ python tests\selftest.py --no-shot  :: 不截图
 - 淡入淡出靠页面透明度实现（Windows 不支持窗口级逐像素透明），
   所以时序是「页面先淡出 → 宿主再隐藏窗口」。
 - `monitor: all` 是把窗口铺满整个虚拟桌面（跨屏一张大画面），不是每块屏各一份时钟。
+- **iOS 上没有原生 App**：iPhone / iPad 只支持 PWA 形式（添加到主屏幕）。
+  真机 App 需要 macOS + Xcode 打包签名，本仓库不提供 `.ipa`。
+- iOS 的「屏幕常亮」依赖 Screen Wake Lock（iOS 16.4+）；低电量模式下系统会强制熄屏。
+- iPhone 竖屏是**单行** `HH:MM:SS`，卡片按屏宽自适应（约 50px 宽）；
+  想要更大的数字请用横屏或 iPad。
 
 ---
 

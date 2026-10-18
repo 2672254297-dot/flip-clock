@@ -17,6 +17,10 @@ del /q "%~dp0app\runtime.json" 2>nul
 del /q "%~dp0app\overlay.pid" 2>nul
 del /q "%~dp0app\*.log" 2>nul
 del /q "%~dp0tests\*.log" 2>nul
+rmdir /s /q "%~dp0tests\ios-shots" 2>nul
+del /q "%~dp0tests\selftest-*.png" 2>nul
+del /q "%~dp0tests\selftest-idle.txt" 2>nul
+rmdir /s /q "%~dp0tools\__pycache__" 2>nul
 echo Cleaned: host stopped, browser cache and runtime files removed.
 echo Press any key to close.
 pause >nul

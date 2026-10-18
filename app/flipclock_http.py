@@ -304,12 +304,14 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True})
 
     def _post_page(self, raw):
-        # 页面回报自身状态（手动模式 / 指针是否隐藏 / 面板是否打开），供日志与自测核对
+        # 页面回报自身状态（手动模式 / 指针是否隐藏 / 面板是否打开 / 指针是否已到齿轮区），
+        # 供日志与自测核对。gear 用来判断合成鼠标输入是否真的送达页面。
         info = self._json_body(raw) or {}
         self.app.page_state = {
             "manual": bool(info.get("manual")),
             "nocursor": bool(info.get("nocursor")),
             "panel": bool(info.get("panel")),
+            "gear": bool(info.get("gear")),
         }
         return self._json({"ok": True})
 

@@ -2,16 +2,42 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Flip Clock</title>
+<!-- viewport-fit=cover：让页面铺到 iPhone 刘海/灵动岛与底部横条之下，配合 safe-area 内边距 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>翻页时钟</title>
+
+<!-- 添加到主屏幕后全屏独立运行（iOS / Android 通用） -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="翻页时钟" />
+<meta name="application-name" content="翻页时钟" />
+<meta name="theme-color" content="#000000" />
+<meta name="description" content="全屏翻页时钟：真 3D 翻页、可自定义背景与配色，可添加到主屏幕离线使用。" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="icon" href="icon-192.png" />
 <style>
   :root {
-    /* 尺寸 */
-    --cw: clamp(72px, 10.5vw, 148px);       /* 卡片宽度 */
+    /* 安全区：iPhone 刘海 / 灵动岛 / 底部横条、iPad 圆角（非 iOS 环境为 0） */
+    --st: env(safe-area-inset-top, 0px);
+    --sr: env(safe-area-inset-right, 0px);
+    --sb: env(safe-area-inset-bottom, 0px);
+    --sl: env(safe-area-inset-left, 0px);
+
+    /* 可用视口；dvh/dvw 会随 iOS 地址栏收放变化，由下方 @supports 覆盖 */
+    --vw: 100vw;
+    --vh: 100vh;
+
+    /* 尺寸：一行是「6 卡 + 2 冒号 + 7 间距」≈ 7.36 个卡宽。
+       用可用宽与可用高各自反推卡宽再取小值 —— iPhone 竖屏也不会横向溢出。 */
+    --cw: min(calc((var(--vw) - var(--sl) - var(--sr) - 24px) / 7.36),
+              calc((var(--vh) - var(--st) - var(--sb) - 24px) / 2.10),
+              148px);
     --ch: calc(var(--cw) * 1.42);           /* 卡片高度 */
     --r: calc(var(--cw) * 0.12);            /* 圆角 */
     --fs: calc(var(--ch) * 0.74);           /* 字号 */
-    --gap: clamp(10px, 1.5vw, 26px);        /* 间距 */
+    --gap: min(calc(var(--cw) * 0.16), 26px);  /* 间距（随卡宽缩放） */
     --dur: 280ms;                           /* 单程翻页时长 */
 
     /* 主题（由 JS 设置，可持久化） */
@@ -29,20 +55,40 @@
     --glow: rgba(255, 255, 255, 0.10);      /* 数字辉光 */
   }
 
+  /* iOS 15.4+ / 现代浏览器：用动态视口单位，地址栏收放时尺寸自动跟随 */
+  @supports (height: 100dvh) {
+    :root { --vw: 100dvw; --vh: 100dvh; }
+  }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    /* 禁用 iOS 上的橡皮筋滚动、长按选择与双击缩放，保持"像原生 App"的手感 */
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
 
   body {
     background-color: var(--bg);
     overflow: hidden;
+    position: fixed;          /* 配合 overscroll-behavior 彻底杜绝页面被拖动 */
+    inset: 0;
     font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
     -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: manipulation;   /* 允许点击/滚动，禁止双击缩放 */
   }
 
   /* ---------------- 舞台（整块淡入淡出） ---------------- */
   .stage {
     position: fixed;
     inset: 0;
+    /* 内容避开刘海 / 灵动岛 / 底部横条（非 iOS 环境这些值为 0） */
+    padding: calc(var(--st) + 8px) calc(var(--sr) + 8px) calc(var(--sb) + 8px) calc(var(--sl) + 8px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -239,13 +285,13 @@
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.6);
   }
 
-  /* ---------------- 设置按钮（靠近才出现） ---------------- */
+  /* ---------------- 设置按钮（桌面：靠近才出现；触屏：常显） ---------------- */
   .gear {
     position: fixed;
-    top: 22px;
-    right: 22px;
-    width: 46px;
-    height: 46px;
+    top: calc(var(--st) + 14px);
+    right: calc(var(--sr) + 14px);
+    width: 44px;
+    height: 44px;              /* ≥44px：iOS 推荐的最小可点区域 */
     display: flex;
     align-items: center;
     justify-content: center;
@@ -269,18 +315,23 @@
   }
   .gear:hover { color: #e8edf3; background: rgba(255, 255, 255, 0.06); }
 
+  /* 触屏设备：齿轮常驻（半透明），按下去更明显 */
   @media (hover: none) {
-    .gear { opacity: 1; transform: none; }   /* 触屏设备常显 */
+    .gear { opacity: .45; transform: none; }
+    .gear:active { opacity: 1; color: #e8edf3; }
+    body.panel-open .gear { opacity: 1; }
   }
 
   /* ---------------- 设置面板 ---------------- */
   .panel {
     position: fixed;
-    top: 78px;
-    right: 22px;
+    top: calc(var(--st) + 68px);
+    right: calc(var(--sr) + 14px);
     width: 300px;
-    max-height: calc(100vh - 104px);
+    max-height: calc(var(--vh) - var(--st) - var(--sb) - 96px);
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;   /* iOS 惯性滚动 */
+    overscroll-behavior: contain;        /* 面板滚到底不要带动页面 */
     padding: 14px 16px 16px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
@@ -481,8 +532,31 @@
     color: #fff;
   }
 
+  /* 窄屏（iPhone 竖屏）：设置面板铺满可用宽度 */
   @media (max-width: 520px) {
-    .panel { left: 14px; right: 14px; width: auto; top: 74px; }
+    .panel {
+      left: calc(var(--sl) + 12px);
+      right: calc(var(--sr) + 12px);
+      width: auto;
+      top: calc(var(--st) + 64px);
+      max-height: calc(var(--vh) - var(--st) - var(--sb) - 80px);
+    }
+  }
+
+  /* 横屏矮屏（iPhone 横屏 / 分屏）：压缩面板与时钟，避免溢出 */
+  @media (max-height: 480px) {
+    .gear { width: 38px; height: 38px; }
+    .gear svg { width: 20px; height: 20px; }
+    .panel { font-size: 12px; padding: 10px 12px 12px; }
+  }
+
+  /* 尊重系统「减弱动态效果」：关掉翻页动画，只做瞬时切换 */
+  @media (prefers-reduced-motion: reduce) {
+    .card.flipping .flap-top,
+    .card.flipping .flap-bottom,
+    .card.flipping .flap-top::after,
+    .card.flipping .flap-bottom::after { animation: none !important; }
+    .stage { transition: none; }
   }
 </style>
 </head>
@@ -1051,6 +1125,19 @@
   var TOKEN = params.get('t') || '';
   // 窗口标识：只用来让宿主认出自己的窗口（会出现在窗口标题里，所以**不是**鉴权凭证）
   var WINDOW_TAG = params.get('w') || '';
+
+  /* ---- 运行形态判定 ----
+     host   ：由本机宿主（start.bat / flipclock_overlay.py）提供，支持「空闲跳出」
+     web    ：iOS 添加到主屏幕、或任意静态托管（GitHub Pages 等）——纯时钟，无空闲跳出
+     判定依据：file:// 与 127.0.0.1/localhost 之外的来源都按纯网页处理。 */
+  var HOSTNAMES = ['127.0.0.1', 'localhost', '[::1]'];
+  var IS_LOCAL_PAGE = (location.protocol === 'file:') ||
+                      (HOSTNAMES.indexOf(location.hostname) >= 0);
+  var WEB_MODE = !OVERLAY && !IS_LOCAL_PAGE;
+  // 是否已「添加到主屏幕」（iOS 独立窗口 / Android standalone）
+  var STANDALONE = (window.navigator.standalone === true) ||
+                   (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+
   var stage = document.getElementById('stage');
   var idleSection = document.getElementById('idleSection');
   var idleEnabled = document.getElementById('idleEnabled');
@@ -1065,6 +1152,12 @@
     document.documentElement.classList.add('ov');
     // 标题里只放非敏感的窗口标识，token 不进标题（同机进程可枚举窗口标题）
     if (WINDOW_TAG) document.title = 'FlipClockOverlay-' + WINDOW_TAG;
+  }
+  if (WEB_MODE) {
+    document.documentElement.classList.add('web');
+    // 网页版没有宿主，空闲跳出整块设置直接不出现
+    idleSection.hidden = true;
+    idleHint.hidden = true;
   }
 
   // 所有请求都带上本次运行的 token（宿主改配置类接口要求它；地址栏直接打开时由宿主 302 补上）
@@ -1145,10 +1238,14 @@
 
   function reportPage() {
     if (!OVERLAY) return;
+    var gearNear = gear.classList.contains('visible');
     var now = [
       'manual=' + (manualMode ? 1 : 0),
       'nocursor=' + (document.documentElement.classList.contains('nocursor') ? 1 : 0),
-      'panel=' + (panel.classList.contains('open') ? 1 : 0)
+      'panel=' + (panel.classList.contains('open') ? 1 : 0),
+      // gear：指针已进入齿轮感应区。自测用它判断"合成鼠标输入是否真的送达页面"，
+      // 从而把"输入没送到"（环境问题）与"点了没反应"（产品缺陷）区分开。
+      'gear=' + (gearNear ? 1 : 0)
     ].join('&');
     if (now === pageLast) return;
     pageLast = now;
@@ -1158,7 +1255,8 @@
       body: JSON.stringify({
         manual: manualMode,
         nocursor: document.documentElement.classList.contains('nocursor'),
-        panel: panel.classList.contains('open')
+        panel: panel.classList.contains('open'),
+        gear: gearNear
       })
     }).catch(function () { /* 没有宿主时忽略 */ });
   }
@@ -1299,13 +1397,23 @@
       syncThemeRev(s.themeRev);
       setTimeout(pollConfig, CONFIG_POLL_MS);
     }).catch(function () {
+      if (WEB_MODE) {
+        enterStandaloneMode();
+        return;
+      }
+      // 本机页面（file:// 或 127.0.0.1）连不上宿主：给提示并等宿主启动
       idleSection.hidden = true;
       idleHint.hidden = false;
-      // file:// 直接打开时探一次就够，避免刷错误；http 下持续重试等待服务启动
-      if (location.protocol === 'http:' || location.protocol === 'https:') {
-        setTimeout(pollConfig, CONFIG_RETRY_MS);
-      }
+      setTimeout(pollConfig, CONFIG_RETRY_MS);
     });
+  }
+
+  /* 纯网页模式（iOS 添加到主屏幕 / 任意静态托管）：没有本地宿主进程，
+     因此不提供「空闲跳出」这一 Windows 专用功能，也不显示 start.bat 提示。 */
+  function enterStandaloneMode() {
+    idleSection.hidden = true;
+    idleHint.hidden = true;
+    document.documentElement.classList.add('web');
   }
 
   function pushConfig(partial) {
@@ -1351,14 +1459,81 @@
   syncInputs();
   applyTheme();
 
+  /* ================= 移动端 / PWA 增强 ================= */
+
+  /* 屏幕常亮：手机、平板当桌面时钟用时不让屏幕自动熄灭。
+     Screen Wake Lock 在 iOS 16.4+ / Chrome 上可用；不支持时静默跳过。
+     页面切到后台会被系统自动释放，回到前台再申请。 */
+  var wakeLock = null;
+  var WANT_WAKE_LOCK = WEB_MODE || STANDALONE;   // 宿主屏保模式下由系统屏保机制负责，不需要
+
+  function requestWakeLock() {
+    if (!WANT_WAKE_LOCK || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+    try {
+      navigator.wakeLock.request('screen').then(function (lock) {
+        wakeLock = lock;
+        // 系统释放（切后台/低电量）后标记失效，等下次可见时重申请
+        lock.addEventListener('release', function () { wakeLock = null; });
+      }).catch(function () { /* 未获得授权（非全屏或低电量模式）：静默降级 */ });
+    } catch (e) { /* 老浏览器没有该 API */ }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') {
+      requestWakeLock();
+      // 从后台回来立刻对齐时间，避免显示停留在切走那一刻
+      clearTimeout(timer);
+      render();
+    }
+  });
+
+  /* 触摸滑动不应滚动页面（iOS 上会让"时钟"像网页一样被拖走） */
+  document.addEventListener('touchmove', function (e) {
+    // 允许在设置面板内滚动
+    if (panel.contains(e.target)) return;
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
+
+  /* 双击缩放兜底（部分 iOS 版本忽略 user-scalable=no） */
+  var lastTouchEnd = 0;
+  document.addEventListener('touchend', function (e) {
+    var now = Date.now();
+    if (now - lastTouchEnd < 300) e.preventDefault();
+    lastTouchEnd = now;
+  }, false);
+
+  /* Service Worker：让「添加到主屏幕」后离线也能打开。
+     只在**非本机**的 http(s) 站点注册 —— 本机宿主页面不注册，
+     免得 kiosk 窗口被缓存住、拿不到刚改过的页面。 */
+  if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0 && !IS_LOCAL_PAGE) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () { /* 离线缓存非必需 */ });
+    });
+  }
+
+  /* 屏幕旋转 / 尺寸变化：底色补满，避免 iOS 上出现白边 */
+  window.addEventListener('orientationchange', function () {
+    setTimeout(function () { window.scrollTo(0, 0); }, 120);
+  });
+
+  /* ================= 启动 ================= */
+  loadTheme();
+  syncInputs();
+  applyTheme();
+
   if (location.hash === '#settings') openPanel();
 
   if (OVERLAY) {
     pollOverlay();
+  } else if (WEB_MODE) {
+    // 纯网页 / iOS 添加到主屏幕：只当钟用，不去连本地宿主
+    enterStandaloneMode();
   } else {
     pollConfig();
   }
-  fetchHostTheme();      // 有宿主时以宿主的 theme.json 为准（离线自动忽略）
+  if (!WEB_MODE) fetchHostTheme();   // 有宿主时以宿主的 theme.json 为准（离线自动忽略）
+
+  requestWakeLock();
 })();
 </script>
 </body>
