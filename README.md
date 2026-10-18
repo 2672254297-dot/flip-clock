@@ -256,6 +256,12 @@ python tests\selftest.py --no-shot  :: 不截图
 
 ---
 
+## 关于本项目
+
+此项目使用 DeepSeek Harness 完成，本作者技术小白，不会编程，如有大佬愿意改进，欢迎指正，感谢🙏🙏🙏
+
+---
+
 ## 开源协议
 
 [MIT](LICENSE) © 2026 Liu
